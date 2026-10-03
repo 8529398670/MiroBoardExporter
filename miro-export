@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Run the exporter from this checkout. With no arguments it backs up every board the token can see:
+#   ./miro-export                  # export all boards (unchanged ones are skipped)
+#   ./miro-export <board id|url>   # export specific boards
+#   ./miro-export list | check     # other commands, see ./miro-export -h
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -x "$here/.venv/bin/python" ]; then
+	echo "Setting up $here/.venv (first run)..." >&2
+	python3 -m venv "$here/.venv"
+	"$here/.venv/bin/pip" install -q -e "$here"
+fi
+exec "$here/.venv/bin/python" -m miro_exporter "$@"

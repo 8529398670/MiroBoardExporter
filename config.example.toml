@@ -1,0 +1,7 @@
+# Copy to config.toml (git-ignored) and fill in your token.
+# The MIRO_ACCESS_TOKEN env var or --token flag override this file.
+# Create a token: https://developers.miro.com/docs/rest-api-build-your-first-hello-world-app
+# Required scope: boards:read
+
+[miro]
+access_token = ""
