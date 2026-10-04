@@ -9,7 +9,7 @@
 
 The canvas only ever loads these previews: a phone can't decode a few thousand full-size photos,
 and it means the site folder alone is enough to browse every board. "Original file" and "Open
-PDF" link to the archived files in place (exports/boards/<board>/assets/...), by a path relative
+PDF" link to the archived files in place (exports/boards/<board>/frames/...), by a path relative
 to the site, so they work as long as the archive sits next to the site.
 
 Keys are Miro resource ids. Boards copied from other boards share them, so a file placed on
@@ -281,7 +281,7 @@ class MediaStore:
 		"""What data.js says about a requested file. Media keys (k) are relative to media/, the
 		original (o) to the site folder."""
 		if req.kind == "doc":
-			return self.href(req.original)
+			return self.href(req.path)
 		if req.kind == "page":
 			store_key = self._key("doc", req.key, req.path)
 			name = f"{store_key}-p{req.page + 1:03d}"
@@ -291,7 +291,7 @@ class MediaStore:
 			return {"k": f"pages/{name}", "w": entry["w"], "h": entry["h"], "c": entry["c"], "t": entry["t"]}
 		store_key = self._key("image", req.key, req.path)
 		ext = req.path.suffix.lower()
-		record = {"k": f"img/{store_key}", "t": [], "o": self.href(req.original)}
+		record = {"k": f"img/{store_key}", "t": [], "o": self.href(req.path)}
 		if ext == ".svg":
 			record["v"] = 1
 			return record

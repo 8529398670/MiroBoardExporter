@@ -1,4 +1,4 @@
-"""Turn a snapshot into the compact board model the viewer draws (written to data.js).
+"""Turn an exported board into the compact board model the viewer draws (written to data.js).
 
 Keys are short because a big board has ~8k records:
 
@@ -12,9 +12,9 @@ Keys are short because a big board has ~8k records:
 	al va        text align (l c r) and vertical align (t m b)
 	bg           fill; bc bw bs border color, width and style
 	kind         shape kind
-	title n      title, and a frame's number in reading order
+	title n      title (an image's original file name), and a frame's number in reading order
 	m            media record (see media.py)
-	o            the original document in the archive, relative to the site folder
+	o            the document's file in the archive, relative to the site folder
 	pg pq ext    document page (1-based), set when the page number is a guess, file extension
 	url prov ct  embed link, provider and content type
 	nc root      mind map node color, root node
@@ -30,7 +30,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
 from . import geometry
@@ -61,6 +61,9 @@ UNPLACEABLE = {"card", "table_text", "kanban", "table"}
 # Structure, not content: never drawn and not worth reporting as skipped.
 SILENT = {"slide_container"}
 
+# Names a pasted or generated image gets: no better than no name at all.
+GENERIC_NAME = re.compile(r"(image|img|blob|file|untitled|download)( ?\(\d+\)| copy)?", re.IGNORECASE)
+
 CHAR_WIDTH = 0.55   # average glyph width / font size for the sans fonts Miro uses
 LINE_HEIGHT = 1.4
 
@@ -69,8 +72,7 @@ LINE_HEIGHT = 1.4
 class MediaRequest:
 	kind: str               # image | page | doc
 	key: str
-	path: Path              # the file to read
-	original: Path = None   # where the original lives in the archive (linked to, never copied)
+	path: Path              # the file in the archive: read for previews, linked to as the original
 	page: int = 0
 
 
@@ -276,10 +278,20 @@ def norm_mindmap(item, rec, box, ctx):
 		rec["root"] = 1
 
 
+def file_title(name):
+	"""An uploaded file's name as a title, unless it's one every pasted image gets ("image.png")."""
+	if not name or GENERIC_NAME.fullmatch(PurePosixPath(name).stem.strip()):
+		return ""
+	return name
+
+
 def norm_image(item, rec, box, ctx):
 	asset = ctx.asset(item, "image")
 	if asset:
-		rec["_m"] = MediaRequest("image", asset.key, asset.path, asset.original)
+		rec["_m"] = MediaRequest("image", asset.key, asset.path)
+		title = file_title(asset.name)
+		if title:
+			rec["title"] = title
 
 
 def norm_document(item, rec, box, ctx):
@@ -294,8 +306,8 @@ def norm_document(item, rec, box, ctx):
 	if guessed:
 		rec["pq"] = 1
 	if rec["ext"] == "pdf" and ctx.can_render(asset.key, asset.path):
-		rec["_m"] = MediaRequest("page", asset.key, asset.path, asset.original, page)
-	rec["_o"] = MediaRequest("doc", asset.key, asset.path, asset.original)
+		rec["_m"] = MediaRequest("page", asset.key, asset.path, page=page)
+	rec["_o"] = MediaRequest("doc", asset.key, asset.path)
 
 
 def norm_embed(item, rec, box, ctx):
@@ -310,7 +322,7 @@ def norm_embed(item, rec, box, ctx):
 		rec["ct"] = str(data["contentType"])
 	asset = ctx.asset(item, "preview")
 	if asset:
-		rec["_m"] = MediaRequest("image", asset.key, asset.path, asset.original)
+		rec["_m"] = MediaRequest("image", asset.key, asset.path)
 
 
 def norm_other(item, rec, box, ctx):
@@ -444,7 +456,7 @@ def build_model(snap, page_count=None, can_render=None):
 		"name": snap.name,
 		"viewLink": snap.board.get("viewLink") or (snap.manifest.get("board") or {}).get("view_link"),
 		"modifiedAt": snap.board.get("modifiedAt") or (snap.manifest.get("board") or {}).get("modified_at"),
-		"snapshot": snap.root.name,
+		"exported": snap.manifest.get("finished_at") or snap.manifest.get("surveyed_at"),
 	})
 	for item in items:
 		item_type = str(item.get("type") or "unknown")

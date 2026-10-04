@@ -113,7 +113,7 @@ def build_board(board_dir, out, store):
 		"documents": counts.get("document", 0),
 		"links": len(data["links"]),
 		"modifiedAt": data["board"].get("modifiedAt"),
-		"snapshot": data["board"].get("snapshot"),
+		"exported": data["board"].get("exported"),
 		"cover": quote(_cover(data)) if _cover(data) else None,
 		"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 		"skipped": data["skipped"],

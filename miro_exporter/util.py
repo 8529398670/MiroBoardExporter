@@ -89,11 +89,6 @@ def utc_now_iso():
 	return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def utc_stamp():
-	"""Timestamp used for snapshot folder names (no colons, sorts chronologically)."""
-	return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
-
-
 def run_parallel(fn, jobs, *, workers, desc, unit, progress=True):
 	"""Yield (job, future) as each call of fn(*job) finishes, with a progress bar.
 

@@ -1,25 +1,24 @@
-"""Read one archived board snapshot exactly as `miro-export` writes it (manifest schema_version 2).
+"""Read one exported board folder exactly as `miro-export` writes it (export.json schema_version 3).
 
-    exports/boards/<Board Name>__<board_id>/latest -> snapshots/<stamp>/
-        manifest.json  board.json  connectors.json  members.json
-        index/items.jsonl  index/frame_tree.json  index/assets.jsonl
-        frames/.../<type>/<id>.json (+ the downloaded file, hard-linked next to it)
+    exports/boards/<Board Name>__<board_id>/
+        export.json  board.json  items.json  files.json  frames.json  connectors.json  members.json
+        frames/.../<original name>__<resource id>.<ext>   every downloaded file, stored once
 
-Items keep the order of index/items.jsonl. Miro has no z-order field, and that order is the
-listing order (ascending ids, i.e. creation order), which is the closest thing to it.
+Items keep the order of items.json. Miro has no z-order field, and that order is the listing
+order (ascending ids, i.e. creation order), which is the closest thing to it.
 """
 
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .util import read_json, read_jsonl
+from .util import read_json
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BOARDS_DIR = "boards"
-LATEST = "latest"
+USABLE = ("complete", "files_pending")
 
 
 @dataclass
@@ -28,16 +27,16 @@ class Asset:
 	role: str       # image | document | preview
 	kind: str       # images | documents | previews
 	key: str
-	path: Path      # the file inside the snapshot
-	original: Path  # the same file in the board's asset store, which outlives snapshots
+	path: Path      # the one copy, in the board folder
+	name: str = None  # the name it was uploaded with, when Miro said
 
 
 @dataclass
 class Snapshot:
+	"""The board as it was last exported."""
 	board_dir: Path
-	root: Path
 	board: dict
-	manifest: dict
+	manifest: dict                                    # export.json
 	items: list = field(default_factory=list)
 	connectors: list = field(default_factory=list)
 	frame_order: list = field(default_factory=list)   # frame ids, reading order, depth-first
@@ -53,30 +52,27 @@ class Snapshot:
 		return self.board.get("name") or (self.manifest.get("board") or {}).get("name") or self.board_dir.name.rsplit("__", 1)[0]
 
 
-def latest_snapshot(board_dir):
-	"""The snapshot `latest` points at, or None. The exporter writes latest.txt where symlinks fail."""
+def _optional(path, default):
+	return read_json(path) if path.is_file() else default
+
+
+def is_exported(board_dir):
+	"""True once the exporter has saved the board's items (its files may still be downloading)."""
 	board_dir = Path(board_dir)
-	link = board_dir / LATEST
-	if link.is_dir():
-		return link.resolve()
-	pointer = board_dir / f"{LATEST}.txt"
-	if pointer.is_file():
-		target = board_dir / pointer.read_text(encoding="utf-8").strip()
-		if target.is_dir():
-			return target.resolve()
-	return None
+	if not (board_dir / "items.json").is_file():
+		return False
+	try:
+		return read_json(board_dir / "export.json").get("status") in USABLE
+	except (OSError, ValueError):
+		return False
 
 
 def find_boards(exports_dir):
-	"""Board folders under exports/boards that have a complete snapshot, sorted by name."""
+	"""Exported board folders under exports/boards, sorted by name."""
 	root = Path(exports_dir) / BOARDS_DIR
 	if not root.is_dir():
 		return []
-	return sorted((d for d in root.iterdir() if d.is_dir() and latest_snapshot(d)), key=lambda d: d.name.lower())
-
-
-def _optional(path, default):
-	return read_json(path) if path.is_file() else default
+	return sorted((d for d in root.iterdir() if d.is_dir() and is_exported(d)), key=lambda d: d.name.lower())
 
 
 def _frame_order(tree):
@@ -99,32 +95,26 @@ def _frame_order(tree):
 
 def load_snapshot(board_dir):
 	board_dir = Path(board_dir)
-	root = latest_snapshot(board_dir)
-	if root is None:
-		raise FileNotFoundError(f"{board_dir} has no complete snapshot")
-	manifest = _optional(root / "manifest.json", {})
+	if not is_exported(board_dir):
+		raise FileNotFoundError(f"{board_dir} has no export")
+	manifest = _optional(board_dir / "export.json", {})
 	if manifest.get("schema_version") != SCHEMA_VERSION:
-		log.warning("%s: snapshot schema_version %s, the viewer expects %s; output may be incomplete",
+		log.warning("%s: export schema_version %s, the viewer expects %s; output may be incomplete",
 			board_dir.name, manifest.get("schema_version"), SCHEMA_VERSION)
 
-	snap = Snapshot(board_dir=board_dir, root=root, board=_optional(root / "board.json", {}), manifest=manifest)
-	index = root / "index" / "items.jsonl"
-	rows = read_jsonl(index) if index.is_file() else []
-	snap.items = [read_json(root / row["json_path"]) for row in rows]
-	snap.connectors = _optional(root / "connectors.json", [])
-	snap.frame_order = _frame_order(_optional(root / "index" / "frame_tree.json", {}))
-	snap.members = {str(m["id"]): m.get("name") for m in _optional(root / "members.json", []) if m.get("id")}
+	snap = Snapshot(board_dir=board_dir, board=_optional(board_dir / "board.json", {}), manifest=manifest)
+	snap.items = _optional(board_dir / "items.json", [])
+	snap.connectors = _optional(board_dir / "connectors.json", [])
+	snap.frame_order = _frame_order(_optional(board_dir / "frames.json", {}))
+	snap.members = {str(m["id"]): m.get("name") for m in _optional(board_dir / "members.json", []) if m.get("id")}
 
-	plan = root / "index" / "assets.jsonl"
-	keys = {(str(r["item_id"]), r["role"]): r for r in (read_jsonl(plan) if plan.is_file() else [])}
+	files = _optional(board_dir / "files.json", {})
 	for item in snap.items:
-		for role, rel in ((item.get("_export") or {}).get("assets") or {}).items():
-			path = root / rel
-			if not path.is_file():
+		for role, key in ((item.get("_export") or {}).get("files") or {}).items():
+			entry = files.get(key) or {}
+			if not entry.get("path"):
 				continue
-			row = keys.get((str(item["id"]), role)) or {}
-			key = str(row.get("key") or f"{item['id']}-{role}")
-			kind = row.get("kind") or role + "s"
-			stored = board_dir / "assets" / kind / f"{key}{path.suffix}"
-			snap.assets.setdefault(str(item["id"]), {})[role] = Asset(role, kind, key, path, stored if stored.is_file() else path)
+			path = board_dir / entry["path"]
+			if path.is_file():
+				snap.assets.setdefault(str(item["id"]), {})[role] = Asset(role, entry.get("kind") or role + "s", str(key), path, entry.get("name"))
 	return snap

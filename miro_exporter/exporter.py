@@ -1,40 +1,38 @@
-"""Board -> timestamped snapshot, in two phases so a multi-board run saves every board's metadata first.
+"""Board -> its folder under exports/boards, updated in place, in two phases so a multi-board run
+saves every board's metadata first.
 
-survey():   board info, every item, collections, indexes and a download plan -> snapshot marked
-            `assets_pending` (cheap: a few minutes for dozens of boards). Unchanged boards are skipped.
-download(): fetch the plan's files into the board's shared asset store, link them into the
-            snapshot, mark it `complete` and point `latest` at it (slow: Miro's rate limit).
+survey():   board info, every item, collections, frame tree and the files.json plan, written in
+            place -> export.json `files_pending` (cheap: a few minutes for dozens of boards).
+            Unchanged boards are skipped.
+download(): move the files already there into place and download the rest, then remove what the
+            board no longer has -> `complete` (slow: Miro's rate limit).
 """
 
 import logging
-import os
-import shutil
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
-from .assets import AssetRef, AssetStore, collect_asset_refs
+from .assets import FilePlacer, collect_asset_refs
 from .client import Cancelled
 from .fetch import BoardFetcher
-from .layout import ASSET_PLAN, ITEMS_INDEX, SnapshotWriter, attach_assets, read_jsonl
-from .util import read_json, safe_name, utc_now_iso, utc_stamp, write_json, write_jsonl, write_text
+from .layout import FILES_FILE, ITEMS_FILE, BoardWriter, doc_paths, read_json_or
+from .util import safe_name, utc_now_iso, write_json
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BOARDS_DIR = "boards"
-SNAPSHOTS_DIR = "snapshots"
-ASSETS_DIR = "assets"
-LATEST = "latest"
+EXPORT_FILE = "export.json"
 
 COMPLETE = "complete"
-PENDING = "assets_pending"   # metadata saved, files still to download
+PENDING = "files_pending"   # metadata saved, files still to download or move into place
 USABLE = (COMPLETE, PENDING)
 
 
 def resolve_board_dir(out_dir, board_id, board_name):
-	"""exports/boards/<name>__<id>. A renamed board keeps its folder (renamed to match) and its assets."""
+	"""exports/boards/<name>__<id>. A renamed board keeps its folder (renamed to match) and its files."""
 	root = Path(out_dir) / BOARDS_DIR
 	suffix = f"__{safe_name(board_id, 100, 'board')}"
 	wanted = root / f"{safe_name(board_name, 80, 'Untitled board')}{suffix}"
@@ -47,62 +45,8 @@ def resolve_board_dir(out_dir, board_id, board_name):
 	return wanted
 
 
-def new_snapshot_dir(board_dir):
-	base = Path(board_dir) / SNAPSHOTS_DIR
-	stamp = utc_stamp()
-	path = base / stamp
-	n = 2
-	while path.exists():
-		path = base / f"{stamp}-{n}"
-		n += 1
-	path.mkdir(parents=True)
-	return path
-
-
-def point_latest(board_dir, snapshot_dir):
-	"""Atomically repoint board_dir/latest at the snapshot (falls back to latest.txt without symlinks)."""
-	board_dir = Path(board_dir)
-	rel = Path(snapshot_dir).relative_to(board_dir)
-	tmp = board_dir / f".{LATEST}.tmp"
-	try:
-		if tmp.is_symlink() or tmp.exists():
-			tmp.unlink()
-		os.symlink(rel, tmp, target_is_directory=True)
-		os.replace(tmp, board_dir / LATEST)
-	except OSError:
-		write_text(board_dir / f"{LATEST}.txt", f"{rel.as_posix()}\n")
-
-
-def read_manifest(snapshot_dir):
-	try:
-		return read_json(Path(snapshot_dir) / "manifest.json")
-	except (OSError, ValueError):
-		return None
-
-
-def newest_snapshot(board_dir, statuses):
-	"""(snapshot_dir, manifest) of the newest snapshot whose status is in `statuses`, or None."""
-	base = Path(board_dir) / SNAPSHOTS_DIR
-	if not base.is_dir():
-		return None
-	for snap in sorted((p for p in base.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True):
-		manifest = read_manifest(snap)
-		if manifest and manifest.get("status") in statuses:
-			return snap, manifest
-	return None
-
-
-def latest_complete(board_dir):
-	return newest_snapshot(board_dir, (COMPLETE,))
-
-
-def prune_incomplete(board_dir, keep):
-	"""Once `keep` is complete, every other unfinished snapshot of the board is superseded: remove it.
-	(Don't run two exports into the same folder at once.)"""
-	for snap in (Path(board_dir) / SNAPSHOTS_DIR).iterdir():
-		if snap.is_dir() and snap != Path(keep) and (read_manifest(snap) or {}).get("status") != COMPLETE:
-			log.debug("Removing superseded snapshot %s", snap.name)
-			shutil.rmtree(snap, ignore_errors=True)
+def read_export(board_dir):
+	return read_json_or(Path(board_dir) / EXPORT_FILE, None)
 
 
 @dataclass
@@ -110,12 +54,11 @@ class Survey:
 	board_id: str
 	name: str
 	board_dir: Path
-	snapshot: Path
-	status: str            # complete | assets_pending
-	reused: bool           # an existing snapshot already matched the board, no item calls made
+	status: str            # complete | files_pending
+	reused: bool           # the saved export already matched the board, no item calls made
 	items: int
-	planned_files: int     # distinct files the snapshot links to
-	to_download: int       # of those, not in the asset store yet
+	planned_files: int     # distinct files the board shows
+	to_download: int       # of those, not on disk yet
 
 
 class BoardExporter:
@@ -129,29 +72,25 @@ class BoardExporter:
 		self.progress = progress
 		self.download_session = download_session
 
-	def asset_store(self, board_dir):
-		return AssetStore(Path(board_dir) / ASSETS_DIR, self.client, download_session=self.download_session, workers=self.workers, progress=self.progress)
+	def placer(self, board_dir):
+		return FilePlacer(board_dir, self.client, download_session=self.download_session, workers=self.workers, progress=self.progress)
 
-	def is_current(self, manifest, board):
-		"""True if a snapshot already holds this board as it is now, made with the options we'd use.
+	def is_current(self, export, board):
+		"""True if the saved export already holds this board as it is now, made with the options we'd use.
 
 		Board modifiedAt moves whenever content changes (checked against item timestamps on real
-		boards), so an unchanged value means re-fetching would produce the same snapshot.
+		boards), so an unchanged value means re-fetching would produce the same export.
 		"""
-		options = manifest.get("options") or {}
+		options = export.get("options") or {}
 		modified = board.get("modifiedAt")
 		return bool(
 			modified
-			and (manifest.get("board") or {}).get("modified_at") == modified
-			and manifest.get("schema_version") == SCHEMA_VERSION
+			and export.get("status") in USABLE
+			and (export.get("board") or {}).get("modified_at") == modified
+			and export.get("schema_version") == SCHEMA_VERSION
 			and (options.get("details") or not self.details)
 			and options.get("asset_format") == self.asset_format
 		)
-
-	def _plan_counts(self, board_dir, snapshot_dir):
-		refs = [AssetRef.from_plan(row) for row in read_jsonl(Path(snapshot_dir) / ASSET_PLAN)]
-		files = len({(ref.kind, ref.key) for ref in refs})
-		return files, self.asset_store(board_dir).count_missing(refs)
 
 	def survey(self, board_id, listed=None, progress=None):
 		"""Phase 1. `listed` is the board's entry from the boards listing, if we have it: its
@@ -162,22 +101,42 @@ class BoardExporter:
 		board = listed or fetcher.fetch_board(board_id)
 		board_dir = resolve_board_dir(self.out_dir, board_id, board.get("name"))
 
-		previous = None if self.force else newest_snapshot(board_dir, USABLE)
-		if previous and self.is_current(previous[1], board):
-			snap, manifest = previous
-			files, missing = self._plan_counts(board_dir, snap) if manifest["status"] == PENDING else (0, 0)
-			return Survey(board_id, board.get("name"), board_dir, snap, manifest["status"], True,
-				(manifest.get("counts") or {}).get("items", 0), files, missing)
+		previous = None if self.force else read_export(board_dir)
+		if previous and self.is_current(previous, board):
+			files = read_json_or(board_dir / FILES_FILE, {})
+			missing = len(self.placer(board_dir).missing(files)) if previous["status"] == PENDING else 0
+			return Survey(board_id, board.get("name"), board_dir, previous["status"], True,
+				(previous.get("counts") or {}).get("items", 0), len(files), missing)
 
 		if listed is not None:
 			board = fetcher.fetch_board(board_id)  # the full board object, for board.json
-		snapshot_dir = new_snapshot_dir(board_dir)
-		manifest = {
+		log.debug("Surveying %r into %s", board.get("name"), board_dir)
+		started = utc_now_iso()
+		api_before = self.client.stats_snapshot()
+		try:
+			dump = fetcher.run(board_id, board)
+		except (KeyboardInterrupt, Cancelled):
+			self._record_failure(board_dir, "interrupted")
+			raise
+		except Exception as e:
+			self._record_failure(board_dir, f"{type(e).__name__}: {e}")
+			raise
+
+		plan, missing = collect_asset_refs(dump.items, self.asset_format)
+		for item_id, role, url in missing:
+			dump.add_error("asset_missing", None, item_id=item_id, role=role, url=url, message="item has no stored file (resource id 0)")
+		previous_files = read_json_or(board_dir / FILES_FILE, {})
+		counts, files = BoardWriter(board_dir, dump).write(plan, previous_files)
+		counts["api_items_total"] = dump.items_total
+
+		placer = self.placer(board_dir)
+		status = PENDING if placer.unplaced(files) else COMPLETE   # also finds files already on disk
+		write_json(board_dir / FILES_FILE, files)
+		api_after = self.client.stats_snapshot()
+		export = {
 			"schema_version": SCHEMA_VERSION,
 			"tool": {"name": "miro-exporter", "version": __version__},
-			"status": "in_progress",
-			"started_at": utc_now_iso(),
-			"finished_at": None,
+			"status": status,
 			"board": {
 				"id": board_id,
 				"name": board.get("name"),
@@ -185,98 +144,75 @@ class BoardExporter:
 				"modified_at": board.get("modifiedAt"),
 			},
 			"options": {"details": self.details, "asset_format": self.asset_format},
-			"paths": {
-				"board": "board.json",
-				"items_index": ITEMS_INDEX,
-				"frame_tree": "index/frame_tree.json",
-				"item_tags": "index/item_tags.json",
-				"asset_plan": ASSET_PLAN,
-				"errors": "errors.jsonl",
-				"asset_store": f"../../{ASSETS_DIR}",
-			},
+			"started_at": started,
+			"surveyed_at": utc_now_iso(),
+			"finished_at": utc_now_iso() if status == COMPLETE else None,
+			"counts": counts,
+			"files": {"planned": len(plan), "distinct": len(files), "missing": len(missing)},
+			"errors": dump.errors,
+			"api": {"survey": {k: api_after[k] - api_before.get(k, 0) for k in api_after}},
 		}
-		manifest_path = snapshot_dir / "manifest.json"
-		write_json(manifest_path, manifest)
-		log.debug("Surveying %r into %s", board.get("name"), snapshot_dir)
-		api_before = self.client.stats_snapshot()
-
-		def finish(status, **extra):
-			api_after = self.client.stats_snapshot()
-			manifest.update(status=status, **extra)
-			manifest["api"] = {"survey": {k: api_after[k] - api_before.get(k, 0) for k in api_after}}
-			write_json(manifest_path, manifest)
-
-		try:
-			dump = fetcher.run(board_id, board)
-			plan, missing = collect_asset_refs(dump.items, self.asset_format)
-			for item_id, role, url in missing:
-				dump.add_error("asset_missing", None, item_id=item_id, role=role, url=url, message="item has no stored file (resource id 0)")
-			counts = SnapshotWriter(snapshot_dir, dump).write(plan)
-			counts["api_items_total"] = dump.items_total
-			files = len({(ref.kind, ref.key) for ref in plan})
-			status = PENDING if plan else COMPLETE
-			finish(status, counts=counts, errors=len(dump.errors), surveyed_at=utc_now_iso(),
-				assets={"planned": len(plan), "files": files, "missing": len(missing)},
-				finished_at=utc_now_iso() if status == COMPLETE else None)
-		except (KeyboardInterrupt, Cancelled):
-			finish("interrupted", finished_at=utc_now_iso())
-			raise
-		except Exception as e:
-			finish("failed", error=f"{type(e).__name__}: {e}", finished_at=utc_now_iso())
-			raise
-
+		write_json(board_dir / EXPORT_FILE, export)
 		if status == COMPLETE:
-			point_latest(board_dir, snapshot_dir)
-			prune_incomplete(board_dir, snapshot_dir)
-		to_download = self.asset_store(board_dir).count_missing(plan) if plan else 0
-		return Survey(board_id, board.get("name"), board_dir, snapshot_dir, status, False, counts["items"], files, to_download)
+			placer.tidy(self._keep(board_dir, files))
+		to_download = sum(1 for entry in files.values() if not entry["path"])
+		return Survey(board_id, board.get("name"), board_dir, status, False, counts["items"], len(files), to_download)
+
+	def _record_failure(self, board_dir, error):
+		"""A failed survey leaves the board's saved data as it was; export.json just notes the attempt."""
+		export = read_export(board_dir)
+		if export is not None:
+			export["last_error"] = {"at": utc_now_iso(), "error": error}
+			write_json(Path(board_dir) / EXPORT_FILE, export)
+
+	def _keep(self, board_dir, files):
+		"""Every file the board folder should hold: placed files plus doc content."""
+		keep = {entry["path"] for entry in files.values() if entry.get("path")}
+		return keep | doc_paths(read_json_or(Path(board_dir) / ITEMS_FILE, []))
 
 	def download(self, survey):
-		"""Phase 2: get the snapshot's planned files and finish it. Re-running continues where it stopped.
+		"""Phase 2: put the board's files in place and finish it. Re-running continues where it stopped.
 
-		A snapshot stays `assets_pending` while some file failed for a reason a later run could fix
+		A board stays `files_pending` while some file failed for a reason a later run could fix
 		(network, server errors); files the API refuses outright are recorded and don't hold it back.
 		"""
-		snapshot_dir = survey.snapshot
-		manifest_path = snapshot_dir / "manifest.json"
-		manifest = read_json(manifest_path)
-		if manifest.get("status") != PENDING:
+		board_dir = survey.board_dir
+		export = read_export(board_dir)
+		if not export or export.get("status") != PENDING:
 			return None
 
-		rows = read_jsonl(snapshot_dir / ASSET_PLAN)
-		refs = [AssetRef.from_plan(row) for row in rows]
+		files = read_json_or(board_dir / FILES_FILE, {})
+		placer = self.placer(board_dir)
 		api_before = self.client.stats_snapshot()
-		results = self.asset_store(survey.board_dir).fetch_all(refs)
-		linked = attach_assets(snapshot_dir, rows, results)
+		results = placer.place(files, save=lambda: write_json(board_dir / FILES_FILE, files))
 
 		failed = {key: r for key, r in results.items() if r.status == "failed"}
 		retry_later = [key for key, r in failed.items() if not r.permanent]
-		errors = [e for e in read_jsonl(snapshot_dir / "errors.jsonl") if e.get("stage") != "asset"]
+		errors = [e for e in export.get("errors") or [] if e.get("stage") != "file"]
 		errors += [
-			{"at": utc_now_iso(), "stage": "asset", "item_id": item_id, "role": role, "error": r.error, "permanent": r.permanent}
-			for (item_id, role), r in failed.items()
+			{"at": utc_now_iso(), "stage": "file", "key": key, "items": [i for i, _ in files[key]["items"]], "error": r.error, "permanent": r.permanent}
+			for key, r in failed.items()
 		]
-		write_jsonl(snapshot_dir / "errors.jsonl", errors)
 
 		counts = Counter(r.status for r in results.values())
 		api_after = self.client.stats_snapshot()
-		previous_files_api = manifest.get("api", {}).get("files") or {}
+		previous_files_api = export.get("api", {}).get("files") or {}
 		status = PENDING if retry_later else COMPLETE
-		manifest["assets"].update(
-			linked=sum(len(roles) for roles in linked.values()),
+		export["files"].update(
+			placed=sum(1 for entry in files.values() if entry.get("path")),
 			failed=len(failed),
-			bytes_downloaded=manifest["assets"].get("bytes_downloaded", 0) + sum(r.bytes for r in results.values()),
+			bytes_downloaded=export["files"].get("bytes_downloaded", 0) + sum(r.bytes for r in results.values()),
 		)
-		manifest.setdefault("api", {})["files"] = {k: api_after[k] - api_before.get(k, 0) + previous_files_api.get(k, 0) for k in api_after}
-		manifest.update(status=status, errors=len(errors), finished_at=utc_now_iso() if status == COMPLETE else None)
-		write_json(manifest_path, manifest)
+		export.setdefault("api", {})["files"] = {k: api_after[k] - api_before.get(k, 0) + previous_files_api.get(k, 0) for k in api_after}
+		export.update(status=status, errors=errors, finished_at=utc_now_iso() if status == COMPLETE else None)
+		write_json(board_dir / EXPORT_FILE, export)
 
 		if status == COMPLETE:
-			point_latest(survey.board_dir, snapshot_dir)
-			prune_incomplete(survey.board_dir, snapshot_dir)
+			placer.tidy(self._keep(board_dir, files))
 		return {
 			"downloaded": counts.get("downloaded", 0),
-			"reused": counts.get("reused", 0),
+			"moved": counts.get("moved", 0),
+			"kept": counts.get("kept", 0),
 			"failed": len(failed),
 			"retry_later": len(retry_later),
 			"status": status,

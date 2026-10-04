@@ -3,7 +3,7 @@
 import copy
 import json
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import pytest
 import requests
@@ -104,6 +104,8 @@ class FakeMiro:
 		self.refused_resources = set()  # resource ids the API answers 404 for (permanent)
 		self.flaky_blobs = set()        # resource ids whose storage download fails with 503 (transient)
 		self.blob_downloads = 0
+		# What each upload was called. Like Miro, a name gets the stored type's extension appended.
+		self.names = {"9001": "Slide1.jpeg.jpg", "9002": "notes.pdf"}
 
 	# requests.Session interface used by the exporter
 	def request(self, method, url, params=None, json=None, timeout=None, stream=False):
@@ -123,9 +125,11 @@ class FakeMiro:
 			if parts.path.rsplit("/", 1)[-1] in self.flaky_blobs:
 				return make_response(503, {"message": "slow down"}, url=full_url)
 			self.blob_downloads += 1
+			# Storage echoes the disposition the signed link asked for.
+			named = {"Content-Disposition": query["response-content-disposition"]} if "response-content-disposition" in query else {}
 			if parts.path.endswith("9001"):
-				return make_response(content=PNG, headers={"Content-Type": "image/png", "Content-Length": str(len(PNG))}, url=full_url)
-			return make_response(content=PDF, headers={"Content-Type": "application/octet-stream"}, url=full_url)
+				return make_response(content=PNG, headers={"Content-Type": "image/png", "Content-Length": str(len(PNG)), **named}, url=full_url)
+			return make_response(content=PDF, headers={"Content-Type": "application/octet-stream", **named}, url=full_url)
 
 		path = parts.path
 		board = f"/v2/boards/{BOARD_ID}"
@@ -159,7 +163,11 @@ class FakeMiro:
 		if m and m.group(2) in self.refused_resources:
 			return make_response(404, {"message": "resource not found"})
 		if m:
-			return make_response(body={"type": m.group(1), "url": f"https://s3.example.com/blob/{m.group(2)}?sig=abc"})
+			link = {"sig": "abc"}
+			name = self.names.get(m.group(2))
+			if name:
+				link["response-content-disposition"] = f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}"
+			return make_response(body={"type": m.group(1), "url": f"https://s3.example.com/blob/{m.group(2)}?{urlencode(link)}"})
 
 		m = re.fullmatch(rf"{re.escape(board)}/docs/(\w+)", path)
 		if m:

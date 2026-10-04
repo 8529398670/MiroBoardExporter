@@ -6,14 +6,15 @@ members, mind map nodes, code widgets, doc content, and the original image/docum
 
 A run works in two phases:
 
-1. **Survey.** Every board's metadata is saved first: items, frames, connectors, indexes,
-   and a list of the files to download. Boards unchanged since their last snapshot are skipped
-   without any API calls. This takes minutes even for dozens of boards, so the structure and
+1. **Survey.** Every board's metadata is saved first: items, frames, connectors, and a list
+   of the files to download. Boards unchanged since their last export are skipped without any
+   API calls. This takes minutes even for dozens of boards, so the structure and
    text of everything is backed up before the slow part starts. It ends with a plan, e.g.
    `412 files to download for 9 boards (about 3 min)`.
-2. **Files.** Images, documents and embed previews are downloaded board by board into a
-   per-board store shared by all snapshots, then linked into the snapshot. When a board's
-   files are done, its snapshot is `complete` and becomes `latest`.
+2. **Files.** Images, documents and embed previews are downloaded board by board, straight
+   into the folder of the frame they sit in, named after the file that was uploaded. Each file
+   is stored once: no copies, no links. A file already on disk is moved (renamed) if its frame
+   changed, never downloaded again. When a board's files are done, it is `complete`.
 
 ## Setup
 
@@ -31,7 +32,7 @@ The token needs the `boards:read` scope ([create one](https://developers.miro.co
 ./miro-export --no-assets             # survey only: save all metadata now, files on a later run
 ./miro-export asdfbase64=            # specific boards (ids or full miro.com URLs)
 ./miro-export --from-file boards.txt  # ids, URLs, "name === id" lines, or a boards.json
-./miro-export --force                 # new snapshots even for unchanged boards
+./miro-export --force                 # re-export even unchanged boards
 ./miro-export list                    # prints "name === id", writes exports/boards.json
 ./miro-export check                   # who the token belongs to + its scopes
 ```
@@ -43,7 +44,7 @@ once), `--asset-format preview`, `-v`.
 **Crashed or pressed Ctrl-C?** Run the same command again.
 - The survey skips every board whose metadata is already saved and unchanged.
 - Downloading continues where it stopped; files already stored are never fetched twice.
-- Unfinished snapshots are removed once a newer snapshot of that board completes.
+- A failed survey leaves the board's saved folder as it was.
 
 ## Speed
 
@@ -63,45 +64,42 @@ Miro gives each token 100,000 API credits per minute. Costs, measured on real bo
 
 ## Output
 
+Each board is one folder, updated in place on every export (there is no snapshot history):
+
 ```
 exports/boards/<Board Name>__<board_id>/
-  assets/{images,documents,previews}/<resource_id>.<ext>   # shared by all snapshots
-  latest -> snapshots/<newest complete snapshot>
-  snapshots/<YYYY-MM-DDTHHMMSSZ>/
-    manifest.json        # status, board modifiedAt, counts per type, asset + API stats, schema_version
-    board.json
-    frames/01 <title>__<id>/frame.json
-    frames/01 <title>__<id>/<type>/<id>.json                # + <id>.png / .pdf / .md / .html
-    frames/01 <title>__<id>/01 <nested frame>__<id>/...
-    _unframed/<type>/<id>.json
-    connectors.json  tags.json  groups.json  members.json
-    index/items.jsonl    # one row per item: type, parent, frame, paths, absolute bbox, tags
-    index/frame_tree.json
-    index/item_tags.json
-    index/assets.jsonl   # the download plan: which file goes next to which item
-    raw/<collection>/page-NNNN.json                        # verbatim API pages
-    errors.jsonl         # non-fatal gaps (e.g. an image whose file never finished uploading)
+  export.json      # status, board modifiedAt, counts per type, file + API stats, errors, schema_version
+  board.json
+  items.json       # every item: the API payload + `_export`
+  files.json       # every file: where it is, the name it was uploaded with, which items show it
+  frames.json      # the frame tree, in reading order
+  connectors.json  tags.json  groups.json  members.json
+  frames/01 <title>__<id>/<original name>__<resource_id>.<ext>   # each file once, e.g. Slide1__3458….jpg
+  frames/01 <title>__<id>/<doc title>__<item_id>.md / .html      # doc format items
+  frames/01 <title>__<id>/01 <nested frame>__<id>/...
+  _unframed/...
 ```
 
-- `manifest.json` `status` is one of:
-  - `assets_pending`: metadata saved, files still downloading
-  - `complete`
-  - `interrupted` or `failed`
-
-  `latest` only ever points at a `complete` snapshot.
-- Item JSON is the API payload unchanged, plus an `_export` key with its paths, absolute
-  canvas bbox/center, assets, docs, tags and `source` (which endpoint it came from).
-  `_export.assets` fills in once the files are downloaded.
-- Item types are never hardcoded: a type the exporter has never seen gets its own folder.
+- `export.json` `status` is `files_pending` (metadata saved, files still to download or move
+  into place) or `complete`. A failed survey adds a `last_error` and changes nothing else.
+- `items.json` keeps each API payload unchanged, plus an `_export` key with its frame, folder,
+  absolute canvas bbox/center, files (`role -> resource id` in `files.json`), docs, tags and
+  `source` (which endpoint it came from).
+- Files are named after the upload Miro recorded (it appends its own extension to some, e.g.
+  `Slide1.jpeg.jpg`; that is dropped). Pasted images were never named, so they come out as
+  `image__<resource_id>.png`. A file shown by several items sits in the first item's frame.
+- An item deleted in Miro has its file removed on the next export. Files you add to a board
+  folder yourself are left alone.
+- Item types are never hardcoded: a type the exporter has never seen is kept in `items.json` like any other.
 - The `/items` listing already includes data and style for every supported type. For items
   it can't represent (it omits their `data`), the exporter tries Miro's experimental endpoint
   on one item per type. That fills in flowchart shapes and mind map nodes. For types where
   nothing more exists (tables, kanban, paint, ...) it keeps the listing data and makes no
   further calls.
 - Frames are numbered in reading order (rows top-to-bottom, then left-to-right).
-- A file Miro refuses outright (a deleted resource, say) is logged in `errors.jsonl` and doesn't
-  hold the snapshot back. Network or server errors leave the snapshot `assets_pending`, so the
-  next run retries just those files.
+- A file Miro refuses outright (a deleted resource, say) is logged in `export.json` `errors` and
+  doesn't hold the board back. Network or server errors leave it `files_pending`, so the next
+  run retries just those files.
 - Board comments aren't available through the REST API.
 
 ## Viewer
@@ -117,7 +115,7 @@ imports the exporter's code.
 ```
 
 The site only holds previews; it never copies the originals. "Original file" and "Open PDF"
-link to the archived files where they are (`exports/boards/<board>/assets/...`), by a path
+link to the archived files where they are (`exports/boards/<board>/frames/...`), by a path
 relative to the site.
 
 The site works from `file://` with no server, so it can be copied to a phone.
@@ -143,7 +141,7 @@ exports/site/
 - **Pan, pinch and keys.** Drag or flick to pan; pinch, scroll or double-tap to zoom.
   Keys: `←`/`→` frames, `0` fit, `+`/`-` zoom, `/` search.
 - **Frames and search.** The dock steps through frames in reading order. Search covers
-  every item's text and title.
+  every item's text and title, including the file name an image was uploaded with.
 - **Tapping an item** shows its text, who added it and when. From there you can view the
   picture larger, open the document, open the link, or open the item in Miro. The address
   (`#<item id>`) links to that item, and each board reopens where you left it.
@@ -168,5 +166,5 @@ exports/site/
 ```
 
 The tests run the whole exporter against an in-memory fake of the API, with no network. The
-viewer's tests build sites from snapshots written in the exporter's layout. If `node` is
+viewer's tests build sites from board folders written in the exporter's layout. If `node` is
 installed, they also run the browser code's unit tests in `tests/js/`.

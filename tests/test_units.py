@@ -2,7 +2,17 @@ from email.utils import formatdate
 
 import pytest
 
-from miro_exporter.assets import AssetRef, AssetStore, collect_asset_refs, guess_extension, resource_key
+from miro_exporter.assets import (
+	FilePlacer,
+	collect_asset_refs,
+	disk_stem,
+	disposition_filename,
+	guess_extension,
+	key_of,
+	link_filename,
+	original_name,
+	resource_key,
+)
 from miro_exporter.cli import default_to_export, read_board_file
 from miro_exporter.client import Cancelled, CreditBucket, MiroAPIError, MiroClient
 from miro_exporter.index import compute_geometry, nearest_frame, reading_order
@@ -152,12 +162,72 @@ def test_reset_wait_uses_the_server_clock():
 	assert MiroClient._seconds_until_reset(resp) == 11  # 10s to the reset + 1s margin, whatever the local clock says
 
 
-def test_resource_downloads_are_charged_as_level_3(client, fake, tmp_path):
+def test_resource_downloads_are_charged_as_level_3_and_named_after_the_upload(client, fake, tmp_path):
 	url = f"https://api.miro.com/v2/boards/{BOARD_ID}/resources/images/9001?format=original"
-	store = AssetStore(tmp_path, client, download_session=fake, progress=False)
-	results = store.fetch_all([AssetRef(item_id="I1", role="image", kind="images", url=url, key="9001")])
-	assert results[("I1", "image")].status == "downloaded"
+	placer = FilePlacer(tmp_path, client, download_session=fake, progress=False)
+	files = {"9001": {"kind": "images", "role": "image", "url": url, "title": None, "items": [["I1", "image"]], "folder": "_unframed", "name": None, "path": None}}
+	results = placer.place(files)
+	assert results["9001"].status == "downloaded"
+	assert (files["9001"]["path"], files["9001"]["name"]) == ("_unframed/Slide1__9001.png", "Slide1.jpeg")
+	assert (tmp_path / "_unframed" / "Slide1__9001.png").read_bytes() == PNG
 	assert client.stats_snapshot()["credits"] == 500
+
+
+def test_lookup_name_reads_the_download_link_without_downloading(client, fake, tmp_path):
+	url = f"https://api.miro.com/v2/boards/{BOARD_ID}/resources/images/9001?format=original"
+	placer = FilePlacer(tmp_path, client, download_session=fake, progress=False)
+	assert placer.lookup_name(url) == "Slide1.jpeg"
+	assert fake.blob_downloads == 0 and client.stats_snapshot()["credits"] == 500
+
+
+@pytest.mark.parametrize("value, expected", [
+	("attachment; filename=\"image.png\"; filename*=UTF-8''image.png", "image.png"),
+	("attachment; filename*=UTF-8''Caf%C3%A9%20menu.pdf", "Café menu.pdf"),
+	('attachment; filename="Slide1.jpeg.jpg"', "Slide1.jpeg.jpg"),
+	('attachment; filename="../../etc/x.png"', "x.png"),
+	("attachment", None),
+	(None, None),
+])
+def test_disposition_filename(value, expected):
+	assert disposition_filename(value) == expected
+
+
+def test_link_filename_reads_the_signed_links_disposition():
+	link = "https://r.miro.com/1/original.png?response-content-disposition=attachment%3B%20filename%3D%22Slide1.jpeg.jpg%22&Signature=x"
+	assert link_filename(link) == "Slide1.jpeg.jpg"
+	assert link_filename("https://r.miro.com/1/preview?Signature=x") is None
+
+
+@pytest.mark.parametrize("name, expected", [
+	("Slide1.jpeg.jpg", "Slide1.jpeg"),   # Miro appends the stored type's extension
+	("photo.png.png", "photo.png"),
+	("v1.2.png", "v1.2.png"),
+	("notes.pdf", "notes.pdf"),
+	(None, None),
+])
+def test_original_name_drops_the_extension_miro_appends(name, expected):
+	assert original_name(name) == expected
+
+
+@pytest.mark.parametrize("name, expected", [
+	("Slide1.jpeg", "Slide1"),
+	("Lecture 3: intro.PDF", "Lecture 3 intro"),
+	("v1.2", "v1.2"),
+	("", "image"),
+	(None, "image"),
+])
+def test_disk_stem(name, expected):
+	assert disk_stem(name, "image") == expected
+
+
+@pytest.mark.parametrize("name, expected", [
+	("Slide1__9001.png", "9001"),
+	("a__b__9001.jpg", "9001"),
+	("9001.png", "9001"),               # the old store's naming
+	("9001-preview.png", "9001-preview"),
+])
+def test_key_of(name, expected):
+	assert key_of(name) == expected
 
 
 # --- geometry ---------------------------------------------------------------

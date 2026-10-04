@@ -36,7 +36,6 @@ class BoardDump:
 	collections: dict = field(default_factory=dict)    # connectors / groups / tags / members -> list
 	docs: dict = field(default_factory=dict)           # doc_format id -> {"markdown": payload, "html": payload}
 	item_tags: dict = field(default_factory=dict)      # item id -> [tag id]
-	raw_pages: dict = field(default_factory=dict)      # collection name -> [verbatim API pages]
 	errors: list = field(default_factory=list)
 	_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -75,11 +74,9 @@ class BoardFetcher:
 
 	def _fetch_items(self, dump):
 		"""Every item on the board, with no type filter, so new widget types come along automatically."""
-		pages = dump.raw_pages.setdefault(ITEMS.name, [])
 		bar = self._bar(desc="items", unit="item")
 
 		def on_page(_page_no, page):
-			pages.append(page)
 			if dump.items_total is None and page.get("total") is not None:
 				dump.items_total = page["total"]
 				bar.total = page["total"]
@@ -117,9 +114,6 @@ class BoardFetcher:
 				dump.add_error(f"collection:{coll.name}", e)
 				(log.debug if coll.experimental else log.warning)("Could not fetch %s: %s", coll.name, e)
 				continue
-			finally:
-				if pages:
-					dump.raw_pages[coll.name] = pages
 
 			if not coll.as_items:
 				dump.collections[coll.name] = rows

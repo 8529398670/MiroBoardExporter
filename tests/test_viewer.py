@@ -1,7 +1,6 @@
-"""The viewer builder (miro_viewer), run against snapshots laid out exactly as miro-export writes them."""
+"""The viewer builder (miro_viewer), run against board folders laid out exactly as miro-export writes them."""
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,10 +20,10 @@ from miro_viewer.source import find_boards, load_snapshot
 ROOT = Path(__file__).resolve().parent.parent
 
 
-# --- a snapshot on disk, in the exporter's layout ---------------------------------
+# --- a board on disk, in the exporter's layout ---------------------------------
 
 def item(item_id, item_type, x, y, w=None, h=None, *, parent=None, frame=None, rotation=0.0, data=None, style=None,
-		position=None, created="2024-01-01T10:00:00Z", assets=None):
+		position=None, created="2024-01-01T10:00:00Z", files=None):
 	"""An item as the exporter stores it: the API payload plus `_export` with the absolute top-left box."""
 	payload = {"id": item_id, "type": item_type, "createdAt": created, "modifiedAt": created, "createdBy": {"id": "u1"}}
 	if data is not None:
@@ -40,37 +39,27 @@ def item(item_id, item_type, x, y, w=None, h=None, *, parent=None, frame=None, r
 		"frame_id": frame,
 		"abs_bbox": {"x": x, "y": y, "width": w, "height": h},
 		"rotation": rotation,
-		"assets": assets or {},
+		"files": files or {},
 		"docs": {},
 		"tags": [],
 	}
 	return payload
 
 
-def write_snapshot(exports, name, board_id, items, *, connectors=(), frames=(), files=None, plan=(), store=None):
-	"""files: {snapshot-relative path: bytes}; plan: index/assets.jsonl rows; store: {assets/-relative path: bytes}."""
+def write_board(exports, name, board_id, items, *, connectors=(), frames=(), files=None, blobs=None):
+	"""files: files.json entries; blobs: {board-folder-relative path: bytes}."""
 	board_dir = exports / "boards" / f"{name}__{board_id}"
-	snap = board_dir / "snapshots" / "2026-01-01T000000Z"
-	(snap / "index").mkdir(parents=True)
-	rows = []
-	for it in items:
-		rel = f"_unframed/{it['type']}/{it['id']}.json"
-		it["_export"]["json_path"] = rel
-		(snap / rel).parent.mkdir(parents=True, exist_ok=True)
-		(snap / rel).write_text(json.dumps(it))
-		rows.append({"id": it["id"], "type": it["type"], "json_path": rel})
-	(snap / "index" / "items.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-	(snap / "index" / "assets.jsonl").write_text("".join(json.dumps(r) + "\n" for r in plan))
-	(snap / "index" / "frame_tree.json").write_text(json.dumps({"roots": list(frames), "frames": {f: {"child_frames": []} for f in frames}}))
-	(snap / "manifest.json").write_text(json.dumps({"schema_version": 2, "status": "complete"}))
-	(snap / "board.json").write_text(json.dumps({"id": board_id, "name": name, "viewLink": f"https://miro.com/app/board/{board_id}/"}))
-	(snap / "connectors.json").write_text(json.dumps(list(connectors)))
-	(snap / "members.json").write_text(json.dumps([{"id": "u1", "name": "Ada"}]))
-	for root, contents in ((snap, files), (board_dir / "assets", store)):
-		for rel, content in (contents or {}).items():
-			(root / rel).parent.mkdir(parents=True, exist_ok=True)
-			(root / rel).write_bytes(content)
-	os.symlink("snapshots/2026-01-01T000000Z", board_dir / "latest", target_is_directory=True)
+	board_dir.mkdir(parents=True)
+	(board_dir / "items.json").write_text(json.dumps(items))
+	(board_dir / "files.json").write_text(json.dumps(files or {}))
+	(board_dir / "frames.json").write_text(json.dumps({"roots": list(frames), "frames": {f: {"child_frames": []} for f in frames}}))
+	(board_dir / "export.json").write_text(json.dumps({"schema_version": 3, "status": "complete", "finished_at": "2026-01-02T03:04:05Z"}))
+	(board_dir / "board.json").write_text(json.dumps({"id": board_id, "name": name, "viewLink": f"https://miro.com/app/board/{board_id}/"}))
+	(board_dir / "connectors.json").write_text(json.dumps(list(connectors)))
+	(board_dir / "members.json").write_text(json.dumps([{"id": "u1", "name": "Ada"}]))
+	for rel, content in (blobs or {}).items():
+		(board_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+		(board_dir / rel).write_bytes(content)
 	return board_dir
 
 
@@ -195,7 +184,7 @@ def test_kanban_cards_at_the_canvas_center_are_listed_not_drawn(tmp_path):
 		item("s1", "sticky_note", 100, 100, 100, 100, data={"content": "<p>hi</p>"}, style={"fillColor": "dark_green"}),
 		item("p1", "paint", 5, 5),
 	]
-	snap = load_snapshot(write_snapshot(tmp_path, "B", "b1", items))
+	snap = load_snapshot(write_board(tmp_path, "B", "b1", items))
 	data = finish(build_model(snap), lambda req: None)
 	assert data["unplaced"] == [{"id": "c1", "t": "card", "title": "Todo"}]
 	assert [r["id"] for r in data["items"]] == ["s1"]
@@ -239,29 +228,27 @@ def board(tmp_path):
 	svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
 	items = [
 		item("f1", "frame", 0, 0, 2000, 2000, data={"title": "Intro & more"}),
-		item("i1", "image", 10, 10, 300, 200, frame="f1", parent="f1", assets={"image": "_unframed/image/i1.png"}),
+		item("i1", "image", 10, 10, 300, 200, frame="f1", parent="f1", files={"image": "900"}),
 		item("d1", "document", 400, 10, 200, 150, frame="f1", parent="f1", data={"title": "Deck"},
-			assets={"document": "_unframed/document/d1.pdf"}, created="2024-01-01T10:00:00Z"),
+			files={"document": "700"}, created="2024-01-01T10:00:00Z"),
 		item("d2", "document", 400, 300, 200, 150, frame="f1", parent="f1", data={"title": "Deck"},
-			assets={"document": "_unframed/document/d2.pdf"}, created="2024-01-02T10:00:00Z"),
+			files={"document": "700"}, created="2024-01-02T10:00:00Z"),
 		item("t1", "text", 10, 500, 200, None, frame="f1", parent="f1", data={"content": "<p>Hello <b>board</b></p>"},
 			style={"fontSize": "24"}),
-		item("v1", "image", 700, 700, 100, 100, frame="f1", parent="f1", assets={"image": "_unframed/image/v1.svg"}),
+		item("v1", "image", 700, 700, 100, 100, frame="f1", parent="f1", files={"image": "800"}),
 	]
-	plan = [
-		{"item_id": "i1", "role": "image", "kind": "images", "key": "900"},
-		{"item_id": "d1", "role": "document", "kind": "documents", "key": "700"},
-		{"item_id": "d2", "role": "document", "kind": "documents", "key": "700"},
-		{"item_id": "v1", "role": "image", "kind": "images", "key": "800"},
-	]
+	folder = "frames/01 Intro & more__f1"
+	files = {
+		"900": {"kind": "images", "role": "image", "name": "Slide1.jpeg", "path": f"{folder}/Slide1__900.png"},
+		"700": {"kind": "documents", "role": "document", "name": "Deck.pdf", "path": f"{folder}/Deck__700.pdf"},
+		"800": {"kind": "images", "role": "image", "name": "image.svg", "path": f"{folder}/image__800.svg"},
+	}
 	connectors = [{"id": "c1", "shape": "curved", "startItem": {"id": "i1"}, "endItem": {"id": "d1", "position": {"x": "0%", "y": "50%"}},
 		"style": {"strokeColor": "#ff0000", "strokeWidth": "3", "endStrokeCap": "stealth"}},
 		{"id": "c2", "shape": "straight", "style": {}}]
 	exports = tmp_path / "exports"
-	write_snapshot(exports, "Café, Board & Co", "uX=", items, connectors=connectors, frames=["f1"], plan=plan,
-		files={"_unframed/image/i1.png": png, "_unframed/document/d1.pdf": pdf, "_unframed/document/d2.pdf": pdf,
-			"_unframed/image/v1.svg": svg},
-		store={"images/900.png": png, "documents/700.pdf": pdf, "images/800.svg": svg})
+	write_board(exports, "Café, Board & Co", "uX=", items, connectors=connectors, frames=["f1"], files=files,
+		blobs={files["900"]["path"]: png, files["700"]["path"]: pdf, files["800"]["path"]: svg})
 	return exports
 
 
@@ -291,13 +278,15 @@ def test_build_site_writes_pages_data_and_media(board):
 	assert image["t"] == [256, 1024, 2048] and (image["w"], image["h"]) == (1500, 1000)
 	for tier in (256, 1024, 2048):
 		assert (site / "media" / f"img/900.{tier}.webp").is_file()
-	assert archived(site, image["o"], board_root) == board_root / "assets/images/900.png"
+	assert archived(site, image["o"], board_root) == board_root / "frames/01 Intro & more__f1/Slide1__900.png"
 	assert not (site / "media" / "orig").exists()            # originals are linked to, never copied
+	assert recs["i1"]["title"] == "Slide1.jpeg"              # searchable by the name it was uploaded with
 	svg = recs["v1"]["m"]
 	assert svg["v"] == 1 and (site / "media/img/800.svg").is_file()
+	assert "title" not in recs["v1"]                         # "image.svg" says nothing: no title
 	assert (recs["d1"]["pg"], recs["d2"]["pg"]) == (1, 1)    # two single-item uploads: both covers
 	assert recs["d1"]["m"]["k"] == "pages/700-p001" and (site / "media/pages/700-p001.2048.webp").is_file()
-	assert archived(site, recs["d1"]["o"], board_root) == board_root / "assets/documents/700.pdf"
+	assert archived(site, recs["d1"]["o"], board_root) == board_root / "frames/01 Intro & more__f1/Deck__700.pdf"
 	assert recs["t1"]["ac"] == 1 and recs["t1"]["html"] == "<p>Hello <b>board</b></p>"
 	assert [link["id"] for link in data["links"]] == ["c1"] and data["skipped"] == {"connector": 1}
 	assert data["links"][0]["s1"] == "stealth" and data["links"][0]["c"] == "#ff0000"
@@ -338,18 +327,25 @@ def test_a_renamed_board_replaces_its_old_page(board):
 	site = board / "site"
 	build_site(find_boards(board), site, workers=1, progress=False)
 	board_dir = next((board / "boards").iterdir())
-	latest = board_dir / "latest" / "board.json"
-	meta = json.loads(latest.read_text())
+	board_json = board_dir / "board.json"
+	meta = json.loads(board_json.read_text())
 	meta["name"] = "Renamed"
-	latest.write_text(json.dumps(meta))
+	board_json.write_text(json.dumps(meta))
 	build_site(find_boards(board), site, workers=1, progress=False)
 	assert not (site / "cafe-board-co-uX.html").exists() and (site / "renamed-uX.html").is_file()
 	assert "renamed-uX.html" in (site / "boards.js").read_text()
 
 
 def test_slug_is_ascii_and_keeps_the_id(tmp_path):
-	snap = load_snapshot(write_snapshot(tmp_path, "Stuart & Redman, J Physiol, 1992", "o9J_lWUXGkY=", []))
+	snap = load_snapshot(write_board(tmp_path, "Stuart & Redman, J Physiol, 1992", "o9J_lWUXGkY=", []))
 	assert board_slug(snap) == "stuart-redman-j-physiol-1992-o9J-lWUXGkY"
+
+
+def test_only_exported_board_folders_are_found(tmp_path):
+	write_board(tmp_path, "Done", "d=", [])
+	legacy = tmp_path / "boards" / "Old__o="
+	(legacy / "snapshots").mkdir(parents=True)               # the old layout, not converted yet
+	assert [d.name for d in find_boards(tmp_path)] == ["Done__d="]
 
 
 def test_select_boards_by_id_url_folder_or_name(tmp_path):

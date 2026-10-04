@@ -114,7 +114,7 @@ def describe(survey):
 	if survey.reused and survey.status == PENDING:
 		return f"{survey.name}: unchanged, {survey.to_download} of {plural(survey.planned_files, 'file')} still to download"
 	if survey.reused:
-		return f"{survey.name}: unchanged since {survey.snapshot.name}"
+		return f"{survey.name}: unchanged"
 	files = f"{plural(survey.planned_files, 'file')} ({survey.to_download} new)" if survey.planned_files else "no files"
 	return f"{survey.name}: saved {plural(survey.items, 'item')}, {files}"
 
@@ -175,10 +175,10 @@ def cmd_export(client, args):
 	new = sum(1 for s in surveys if not s.reused)
 	to_download = sum(s.to_download for s in pending)
 	eta = duration(client.bucket.seconds_for(to_download * LEVEL_COST[RESOURCE_LEVEL]))
-	say(f"Survey done: {new} new snapshots, {len(surveys) - new} unchanged, {len(failures)} failed. "
+	say(f"Survey done: {new} updated, {len(surveys) - new} unchanged, {len(failures)} failed. "
 		f"{plural(to_download, 'file')} to download for {plural(len(pending), 'board')} ({eta}).")
 
-	# Phase 2: files, board by board. Each finished board becomes its `latest` snapshot.
+	# Phase 2: files, board by board: moved into place if already on disk, downloaded otherwise.
 	complete = len(surveys) - len(pending)
 	still_pending = 0
 	if pending and args.no_assets:
@@ -187,7 +187,7 @@ def cmd_export(client, args):
 		if args.no_assets:
 			still_pending += 1
 			continue
-		say(f"  [{n}/{len(pending)}] {survey.name}: {plural(survey.to_download, 'file')} to download")
+		say(f"  [{n}/{len(pending)}] {survey.name}: {plural(survey.to_download, 'file')} to download, {survey.planned_files - survey.to_download} on disk")
 		try:
 			result = exporter.download(survey)
 		except (KeyboardInterrupt, Cancelled):
@@ -204,7 +204,7 @@ def cmd_export(client, args):
 			still_pending += 1
 		if result:
 			retry = f", {result['retry_later']} to retry next run" if result["retry_later"] else ""
-			say(f"      {result['downloaded']} downloaded, {result['reused']} already stored, {result['failed']} failed{retry}")
+			say(f"      {result['downloaded']} downloaded, {result['moved']} moved or renamed, {result['kept']} already in place, {result['failed']} failed{retry}")
 
 	say(f"Done: {complete} boards complete, {still_pending} still pending, {len(failures)} failed")
 	if failures:
@@ -235,11 +235,11 @@ def build_parser():
 	lister.add_argument("--project-id")
 	lister.set_defaults(func=cmd_list)
 
-	export = sub.add_parser("export", parents=[common], help="export boards into timestamped snapshots (the default command)")
+	export = sub.add_parser("export", parents=[common], help="export boards, each into its own folder updated in place (the default command)")
 	export.add_argument("boards", nargs="*", help="board ids or miro.com board URLs (default: every board the token can see)")
 	export.add_argument("--from-file", action="append", metavar="FILE", help="file of board ids/URLs/`name === id` lines, or a boards.json")
 	export.add_argument("--all", action="store_true", help="also export every board the token can see")
-	export.add_argument("--force", action="store_true", help="snapshot boards even if they haven't changed since their last snapshot")
+	export.add_argument("--force", action="store_true", help="re-export boards even if they haven't changed since their last export")
 	export.add_argument("--workers", type=int, default=8, help="parallel requests within a board (default: %(default)s)")
 	export.add_argument("--survey-workers", type=int, default=4, help="boards surveyed at once (default: %(default)s)")
 	export.add_argument("--no-details", action="store_true", help="skip filling in items the listing can't represent (flowchart shapes, mind map nodes)")
