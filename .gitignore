@@ -1,4 +1,6 @@
 .venv/
+*.DS_Store
+.claude/
 __pycache__/
 *.egg-info/
 .pytest_cache/
