@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Miro boards</title>
+$styles
+</head>
+<body class="index-page">
+<header class="index-head">
+	<h1>Miro boards</h1>
+	<p id="summary"></p>
+	<div class="controls">
+		<input id="filter" type="search" placeholder="Find a board" autocomplete="off" aria-label="Find a board">
+		<select id="sort" aria-label="Sort boards">
+			<option value="name">Name</option>
+			<option value="recent">Recently edited</option>
+			<option value="items">Most items</option>
+		</select>
+	</div>
+</header>
+<ul id="boards" class="boards"></ul>
+<noscript><p class="none">The board list needs JavaScript.</p></noscript>
+$scripts
+<script src="boards.js"></script>
+</body>
+</html>

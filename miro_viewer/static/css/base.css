@@ -1,0 +1,133 @@
+/* Tokens and resets shared by the board pages and the board list. The interface follows the
+   system's light/dark setting; boards themselves stay light (see board.css), because their
+   colors were chosen against Miro's light canvas. */
+
+:root {
+	--bg: #f4f4f2;
+	--surface: rgba(255, 255, 255, 0.92);
+	--surface-solid: #ffffff;
+	--surface-2: #efeff0;
+	--surface-3: #e4e4e7;
+	--text: #1d1d1f;
+	--muted: #6b6b73;
+	--line: rgba(0, 0, 0, 0.09);
+	--accent: #4262ff;
+	--accent-soft: rgba(66, 98, 255, 0.12);
+	--accent-text: #ffffff;
+	--mark: rgba(255, 213, 0, 0.45);
+	--shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 24px -6px rgba(0, 0, 0, 0.18);
+	--radius: 16px;
+	--tap: 44px;
+	--font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--safe-t: env(safe-area-inset-top, 0px);
+	--safe-r: env(safe-area-inset-right, 0px);
+	--safe-b: env(safe-area-inset-bottom, 0px);
+	--safe-l: env(safe-area-inset-left, 0px);
+	color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--bg: #161618;
+		--surface: rgba(36, 36, 40, 0.92);
+		--surface-solid: #242428;
+		--surface-2: #2f2f34;
+		--surface-3: #3a3a40;
+		--text: #f2f2f4;
+		--muted: #a1a1aa;
+		--line: rgba(255, 255, 255, 0.1);
+		--accent: #7b93ff;
+		--accent-soft: rgba(123, 147, 255, 0.18);
+		--accent-text: #0e1330;
+		--mark: rgba(255, 200, 0, 0.35);
+		--shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 28px -6px rgba(0, 0, 0, 0.6);
+	}
+}
+
+:root[data-theme="dark"] {
+	--bg: #161618;
+	--surface: rgba(36, 36, 40, 0.92);
+	--surface-solid: #242428;
+	--surface-2: #2f2f34;
+	--surface-3: #3a3a40;
+	--text: #f2f2f4;
+	--muted: #a1a1aa;
+	--line: rgba(255, 255, 255, 0.1);
+	--accent: #7b93ff;
+	--accent-soft: rgba(123, 147, 255, 0.18);
+	--accent-text: #0e1330;
+	--mark: rgba(255, 200, 0, 0.35);
+	--shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 28px -6px rgba(0, 0, 0, 0.6);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font: 15px/1.4 var(--font);
+	-webkit-text-size-adjust: 100%;
+	-webkit-tap-highlight-color: transparent;
+}
+
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: var(--tap);
+	height: var(--tap);
+	padding: 0;
+	border: 0;
+	border-radius: 12px;
+	background: transparent;
+	color: var(--text);
+	text-decoration: none;
+}
+.icon-btn:hover { background: var(--surface-2); }
+.icon-btn:active { background: var(--surface-3); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+.icon-btn svg {
+	width: 22px;
+	height: 22px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--tap);
+	padding: 0 18px;
+	border: 0;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--text);
+	font-weight: 550;
+	text-decoration: none;
+	white-space: nowrap;
+}
+.pill:hover { background: var(--surface-3); }
+.pill.primary { background: var(--accent); color: var(--accent-text); }
+
+.note { margin: 0; color: var(--muted); font-size: 13px; }
+.eyebrow { margin: 0; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1px; }
+
+.mv-offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

@@ -15,12 +15,25 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# The board viewer (`miro-view`): image previews and PDF page renders.
+viewer = [
+	"Pillow>=10",
+	"pymupdf>=1.24",
+]
 
 [project.scripts]
 miro-export = "miro_exporter.cli:main"
+miro-view = "miro_viewer.cli:main"
 
 [tool.setuptools]
-packages = ["miro_exporter"]
+packages = ["miro_exporter", "miro_viewer"]
+
+[tool.setuptools.package-data]
+miro_viewer = ["static/**/*", "templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+	# PyMuPDF's SWIG bindings, on newer Pythons
+	"ignore:builtin type [Ss]wig:DeprecationWarning",
+]

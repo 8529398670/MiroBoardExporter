@@ -1,0 +1,299 @@
+/* The board canvas and everything drawn on it. Sizes inside #world are in board units: the
+   whole world is scaled by one transform, so font sizes, borders and paddings here are what
+   Miro calls them, not screen pixels. */
+
+.board-page {
+	position: fixed;
+	inset: 0;
+	overflow: hidden;
+	overscroll-behavior: none;
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+
+#stage {
+	--canvas: #f6f6f3;
+	--dot: #d3d3cd;
+	position: fixed;
+	inset: 0;
+	overflow: hidden;
+	touch-action: none;
+	cursor: grab;
+	background-color: var(--canvas);
+	background-image: radial-gradient(circle, var(--dot) 0 1px, transparent 1.6px);
+	background-size: var(--grid, 20px) var(--grid, 20px);
+	background-position: var(--gx, 0) var(--gy, 0);
+	color: #1a1a1a;
+	font-family: "Open Sans", var(--font);
+}
+#stage.dragging { cursor: grabbing; }
+
+#world {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
+	transform-origin: 0 0;
+}
+/* A layer hint only while moving: afterwards the text re-rasterizes crisp at the new scale. */
+#stage.interacting #world { will-change: transform; }
+
+.mv-item { position: absolute; box-sizing: border-box; }
+
+/* --- rich text (Quill markup from Miro, sanitized by the builder) --- */
+
+.mv-rt {
+	width: 100%;
+	line-height: 1.4;
+	overflow-wrap: break-word;
+	word-break: normal;
+}
+.mv-rt p { margin: 0; min-height: 1.4em; }
+.mv-rt ol, .mv-rt ul { margin: 0; padding-left: 1.4em; }
+.mv-rt li[data-list="bullet"] { list-style-type: disc; }
+.mv-rt li[data-list="ordered"] { list-style-type: decimal; }
+.mv-rt li[data-list="checked"], .mv-rt li[data-list="unchecked"] { list-style-type: none; }
+.mv-rt li[data-list="checked"]::before { content: "\2611\00a0"; }
+.mv-rt li[data-list="unchecked"]::before { content: "\2610\00a0"; }
+.mv-rt .ql-indent-1 { margin-left: 1.4em; }
+.mv-rt .ql-indent-2 { margin-left: 2.8em; }
+.mv-rt .ql-indent-3 { margin-left: 4.2em; }
+.mv-rt .ql-indent-4 { margin-left: 5.6em; }
+.mv-rt .ql-indent-5 { margin-left: 7em; }
+.mv-rt .ql-indent-6 { margin-left: 8.4em; }
+.mv-rt .ql-indent-7 { margin-left: 9.8em; }
+.mv-rt .ql-indent-8 { margin-left: 11.2em; }
+.mv-rt li.ql-indent-1, .mv-rt li.ql-indent-3, .mv-rt li.ql-indent-5 { list-style-type: circle; }
+.mv-rt li.ql-indent-2, .mv-rt li.ql-indent-4 { list-style-type: square; }
+.mv-rt a { color: #4262ff; text-decoration: underline; }
+
+/* Miro's fonts, with offline fallbacks: the site has to work on a phone without a network. */
+.ff-open_sans { font-family: "Open Sans", var(--font); }
+.ff-noto_sans { font-family: "Noto Sans", var(--font); }
+.ff-arial { font-family: Arial, Helvetica, sans-serif; }
+.ff-roboto { font-family: Roboto, var(--font); }
+.ff-montserrat, .ff-spoof { font-family: Montserrat, "Avenir Next", var(--font); }
+.ff-lato, .ff-pt_sans, .ff-ibm_plex_sans { font-family: Lato, var(--font); }
+.ff-pt_serif, .ff-georgia, .ff-noto_serif, .ff-ibm_plex_serif, .ff-eb_garamond { font-family: Georgia, "Times New Roman", serif; }
+.ff-times_new_roman { font-family: "Times New Roman", Times, serif; }
+.ff-ibm_plex_mono, .ff-roboto_mono, .ff-source_code_pro, .ff-courier_new { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.ff-caveat, .ff-permanent_marker, .ff-bangers { font-family: "Marker Felt", "Comic Sans MS", cursive; }
+
+/* A fixed box with text placed inside it (notes, shapes). */
+.mv-tb {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* Too small to read: drop the text, keep a hint of it. */
+.greek .mv-tb .mv-rt { display: none; }
+.mv-text.greek .mv-rt, .mv-mm.greek .mv-rt { visibility: hidden; }
+.greek .mv-tb::after,
+.mv-text.greek::after {
+	content: "";
+	position: absolute;
+	left: 18%;
+	right: 18%;
+	top: 38%;
+	bottom: 38%;
+	border-radius: 2px;
+	background: currentColor;
+	opacity: 0.12;
+}
+.mv-text.greek::after { left: 0; right: 10%; top: 30%; bottom: 30%; }
+
+/* --- frames --- */
+
+.mv-frame { width: 0; height: 0; }
+.mv-frame-bg {
+	position: absolute;
+	background: #fff;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.mv-frame-title {
+	position: absolute;
+	left: 0;
+	top: 0;
+	transform-origin: 0 100%;
+	padding: 0 2px 5px;
+	font: 500 13px/1.25 var(--font);
+	color: #64646e;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+/* --- notes, cards, shapes, text --- */
+
+.mv-note {
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06), 0 6px 10px -6px rgba(0, 0, 0, 0.3);
+	font-family: "Open Sans", var(--font);
+}
+
+.mv-card {
+	display: flex;
+	background: #fff;
+	border-radius: 6px;
+	border-left: 8px solid #2d9bf0;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.06);
+	overflow: hidden;
+}
+.mv-card-body { padding: 0.5em 0.8em; min-width: 0; }
+.mv-card-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.mv-card-desc { color: #555; margin-top: 0.3em; }
+
+.mv-shape svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.mv-shape .mv-tb { z-index: 1; }
+
+.mv-text { min-height: 1em; }
+
+/* --- pictures --- */
+
+.mv-pic-box { overflow: hidden; }
+.mv-pic {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	display: block;
+	opacity: 0;
+	pointer-events: none;
+	-webkit-user-drag: none;
+	-webkit-touch-callout: none;
+}
+.mv-pic.ready { opacity: 1; transition: opacity 0.12s; }
+.mv-page { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.08); background-color: #fff; }
+
+.mv-missing {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: repeating-linear-gradient(45deg, #ececea 0 12px, #e2e2df 12px 24px);
+	color: #8a8a8a;
+	font: 500 14px var(--font);
+	overflow: hidden;
+}
+
+.mv-doc {
+	display: flex;
+	background: #fff;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.08);
+	overflow: hidden;
+}
+.mv-doc-card { margin: auto; padding: 8%; text-align: center; font-family: var(--font); color: #333; }
+.mv-doc-ext {
+	display: inline-block;
+	padding: 0.25em 0.7em;
+	border-radius: 0.35em;
+	background: #c43e1c;
+	color: #fff;
+	font-size: 1.6em;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+}
+.mv-doc-title { margin-top: 0.8em; font-size: 1.1em; font-weight: 600; overflow-wrap: anywhere; }
+.mv-doc-page { margin-top: 0.4em; color: #777; }
+
+.mv-embed { background: #1b1b1f; overflow: hidden; border-radius: 4px; }
+.mv-embed-card { background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1); }
+.mv-embed-bar {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	padding: 0.6em 0.9em;
+	background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+	color: #fff;
+	font-family: var(--font);
+}
+.mv-embed-card .mv-embed-bar { top: 0; justify-content: center; background: none; color: #222; }
+.mv-embed-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-embed-prov { opacity: 0.75; font-size: 0.85em; }
+.mv-play {
+	position: absolute;
+	left: 50%;
+	top: 45%;
+	z-index: 1;
+	transform: translate(-50%, -50%);
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.6);
+}
+.mv-play::after {
+	content: "";
+	position: absolute;
+	inset: 28% 24% 28% 36%;
+	background: #fff;
+	clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+/* --- mind maps, links, placeholders --- */
+
+.mv-mm {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 0.6em;
+	white-space: nowrap;
+	color: #1a1a1a;
+}
+.mv-mm .mv-rt { width: auto; text-align: center; }
+.mv-mm-root .mv-rt { font-weight: 600; }
+
+.mv-link { pointer-events: none; }
+.mv-link svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.mv-cap {
+	position: absolute;
+	width: auto;
+	transform: translate(-50%, -50%);
+	padding: 0 0.3em;
+	background: #f6f6f3;
+	white-space: nowrap;
+}
+
+.mv-ph {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.2em;
+	padding: 4px;
+	border: 2px dashed rgba(0, 0, 0, 0.22);
+	border-radius: 6px;
+	background: rgba(255, 255, 255, 0.55);
+	color: #6b6b6b;
+	font-family: var(--font);
+	text-align: center;
+	overflow: hidden;
+}
+.mv-ph-type { font-weight: 600; }
+.mv-ph-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; }
+
+/* --- selection and "here it is" ring; widths are set per zoom by the scene --- */
+
+.mv-sel { outline: 2px solid #4262ff; outline-offset: 2px; }
+.mv-flash { animation: mv-flash 2s ease-out; }
+@keyframes mv-flash {
+	0%, 40% { outline: var(--ring, 3px) solid rgba(66, 98, 255, 0.95); outline-offset: var(--ring-gap, 3px); }
+	100% { outline: var(--ring, 3px) solid rgba(66, 98, 255, 0); outline-offset: var(--ring-gap, 3px); }
+}
+
+.empty {
+	position: fixed;
+	left: 50%;
+	top: 50%;
+	z-index: 5;
+	margin: 0;
+	transform: translate(-50%, -50%);
+	color: var(--muted);
+	font-size: 15px;
+}

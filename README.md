@@ -104,10 +104,69 @@ exports/boards/<Board Name>__<board_id>/
   next run retries just those files.
 - Board comments aren't available through the REST API.
 
+## Viewer
+
+`./miro-view` turns the archived boards into a pan-and-zoom HTML site, built for phones first.
+It is a separate package (`miro_viewer/`). It only reads what the exporter wrote; it never
+imports the exporter's code.
+
+```bash
+./miro-view                       # every board -> exports/site/index.html (first run installs Pillow + PyMuPDF)
+./miro-view MCAT AC               # just these boards (ids, URLs or parts of names), added to the site
+./miro-view --out ~/Desktop/site  # somewhere else
+```
+
+The site only holds previews; it never copies the originals. "Original file" and "Open PDF"
+link to the archived files where they are (`exports/boards/<board>/assets/...`), by a path
+relative to the site.
+
+The site works from `file://` with no server, so it can be copied to a phone.
+- Copying the `site/` folder alone is enough to browse every board (about 2 GB). The links to
+  originals only work when the archive comes along, i.e. when the whole `exports/` folder is
+  copied.
+- On an iPhone, open it with an app that serves local HTML. The Files app's Quick Look doesn't
+  run JavaScript.
+- To try it over the network, run `python3 -m http.server -d exports` and open
+  `/site/index.html`.
+
+```
+exports/site/
+  index.html  boards.js                  # the board list
+  <board-slug>.html                      # one page per board
+  static/css/  static/js/                # shared by every page (plain scripts, no build step)
+  boards/<board-slug>/data.js            # the board's items, links and frames
+  media/img/<key>.{256,1024,2048}.webp   # previews: smaller tiers only below the original's size,
+                                         # the top one (2048 px at most) always
+  media/pages/<key>-p<N>.<tier>.webp     # rendered PDF pages
+```
+
+- **Pan, pinch and keys.** Drag or flick to pan; pinch, scroll or double-tap to zoom.
+  Keys: `←`/`→` frames, `0` fit, `+`/`-` zoom, `/` search.
+- **Frames and search.** The dock steps through frames in reading order. Search covers
+  every item's text and title.
+- **Tapping an item** shows its text, who added it and when. From there you can view the
+  picture larger, open the document, open the link, or open the item in Miro. The address
+  (`#<item id>`) links to that item, and each board reopens where you left it.
+- **Pictures are drawn at the size they appear.** A picture shows as its average color when
+  tiny, then as a 256, 1024 or 2048 px preview, within a decode budget. That keeps a
+  7,000-image board usable on a phone. Previews are shared across boards, so a file used on
+  several boards is processed once. Rebuilds only process new files. GIFs show their first
+  frame on the board and play in "View larger".
+- **Document pages.** Each page of a PDF or slide deck is its own item on the board. The page
+  number is worked out from the upload layout: a cover item, then a grid of pages. PDF pages
+  are rendered; PPT/PPTX pages appear as cards that open the file.
+- **Things Miro's API can't describe** (tables, kanban boards) appear as labelled placeholders.
+  Pen drawings have no shape in the archive and are counted as skipped. Kanban cards, which
+  come without a position, are listed in the Frames panel.
+- **Stacked slide frames** (a presentation's frames all share one position) are laid out as a
+  grid.
+
 ## Tests
 
 ```bash
 .venv/bin/pytest
 ```
 
-The tests run the whole exporter against an in-memory fake of the API, with no network.
+The tests run the whole exporter against an in-memory fake of the API, with no network. The
+viewer's tests build sites from snapshots written in the exporter's layout. If `node` is
+installed, they also run the browser code's unit tests in `tests/js/`.

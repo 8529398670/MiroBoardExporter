@@ -1,0 +1,78 @@
+/* The board list: a search box and a grid of boards, one column on phones. */
+
+.index-page { min-height: 100vh; }
+
+.index-head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	padding: calc(var(--safe-t) + 16px) calc(var(--safe-r) + 16px) 12px calc(var(--safe-l) + 16px);
+	background: var(--bg);
+	border-bottom: 1px solid var(--line);
+}
+.index-head h1 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+.index-head p { margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+
+.controls { display: flex; gap: 8px; }
+.controls input, .controls select {
+	height: var(--tap);
+	border: 0;
+	border-radius: 12px;
+	background: var(--surface-2);
+	font-size: 16px;
+}
+.controls input { flex: 1; min-width: 0; padding: 0 14px; }
+.controls select { padding: 0 10px; }
+
+.boards {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 12px;
+	padding: 16px calc(var(--safe-r) + 16px) calc(var(--safe-b) + 24px) calc(var(--safe-l) + 16px);
+	margin: 0;
+	list-style: none;
+}
+
+.board {
+	display: flex;
+	gap: 12px;
+	align-items: center;
+	padding: 10px;
+	border-radius: var(--radius);
+	background: var(--surface-solid);
+	box-shadow: 0 0 0 1px var(--line);
+	color: var(--text);
+	text-decoration: none;
+}
+.board:hover { box-shadow: 0 0 0 1px var(--accent); }
+
+.cover {
+	flex: none;
+	width: 88px;
+	height: 66px;
+	border-radius: 10px;
+	background: var(--surface-2) center / cover no-repeat;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--muted);
+	font-size: 22px;
+	font-weight: 700;
+}
+.board-text { min-width: 0; }
+.board-name {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 650;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.board-stats, .board-date { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.none { padding: 32px 16px; text-align: center; color: var(--muted); }
+
+@media (min-width: 640px) {
+	.boards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+	.board { flex-direction: column; align-items: stretch; }
+	.cover { width: 100%; height: auto; aspect-ratio: 16 / 10; font-size: 32px; }
+}

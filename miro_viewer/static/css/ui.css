@@ -1,0 +1,229 @@
+/* Bars, panels and sheets over the board. Mobile first: the dock and every panel live at the
+   bottom, in thumb reach; from 900px panels move to the sides and leave the board visible. */
+
+/* No double-tap page zoom on the controls (iOS ignores user-scalable=no). */
+.bar, .panel, .lightbox, .toast { touch-action: manipulation; }
+
+.bar {
+	position: fixed;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 4px;
+	border-radius: var(--radius);
+	background: var(--surface);
+	box-shadow: var(--shadow);
+	-webkit-backdrop-filter: saturate(1.6) blur(14px);
+	backdrop-filter: saturate(1.6) blur(14px);
+}
+
+.topbar {
+	top: calc(var(--safe-t) + 10px);
+	left: calc(var(--safe-l) + 10px);
+	right: calc(var(--safe-r) + 10px);
+}
+.titles { flex: 1; min-width: 0; padding: 0 6px; }
+.titles h1 {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 650;
+	line-height: 1.2;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.titles p {
+	margin: 1px 0 0;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.dock {
+	bottom: calc(var(--safe-b) + 12px);
+	left: 50%;
+	transform: translateX(-50%);
+	max-width: calc(100vw - 20px);
+}
+.pager { display: flex; align-items: center; }
+.pager-label, .zoom-label {
+	height: var(--tap);
+	border: 0;
+	border-radius: 12px;
+	background: transparent;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+}
+.pager-label { min-width: 72px; padding: 0 6px; }
+.zoom-label { min-width: 60px; padding: 0 8px; color: var(--muted); }
+.pager-label:hover, .zoom-label:hover { background: var(--surface-2); }
+.no-frames .pager { display: none; }
+.no-frames.no-extras #framesBtn { display: none; }
+.desktop-only { display: none; }
+
+/* --- panels: bottom sheets on phones --- */
+
+.panel {
+	position: fixed;
+	z-index: 30;
+	left: calc(var(--safe-l) + 8px);
+	right: calc(var(--safe-r) + 8px);
+	bottom: calc(var(--safe-b) + 8px);
+	display: flex;
+	flex-direction: column;
+	max-height: min(62vh, 560px);
+	border-radius: 18px;
+	background: var(--surface-solid);
+	box-shadow: var(--shadow), 0 0 0 1px var(--line);
+	overflow: hidden;
+	animation: mv-sheet-in 0.18s ease-out;
+}
+@keyframes mv-sheet-in { from { transform: translateY(16px); opacity: 0; } }
+
+.panel-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 6px 6px 16px;
+	border-bottom: 1px solid var(--line);
+}
+.panel-head h2 { flex: 1; margin: 0; font-size: 17px; font-weight: 650; }
+.panel-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 8px 8px 12px; -webkit-overflow-scrolling: touch; }
+.panel-body h3 { margin: 16px 8px 4px; font-size: 13px; color: var(--muted); font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+.panel-body > .note { padding: 4px 8px; }
+
+#searchInput {
+	flex: 1;
+	min-width: 0;
+	height: 40px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 10px;
+	background: var(--surface-2);
+	font-size: 16px; /* below 16px iOS zooms the page on focus */
+	outline: none;
+}
+#searchInput:focus { box-shadow: 0 0 0 2px var(--accent); }
+
+.list { list-style: none; margin: 0; padding: 0; }
+.row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	width: 100%;
+	min-height: var(--tap);
+	padding: 10px;
+	border: 0;
+	border-radius: 10px;
+	background: transparent;
+	text-align: left;
+}
+button.row:hover { background: var(--surface-2); }
+.row.static { cursor: default; }
+.row .num {
+	flex: none;
+	min-width: 2.2em;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	font-size: 13px;
+	font-weight: 600;
+}
+.row .label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+}
+.current > .row { background: var(--accent-soft); }
+.current > .row .num { color: var(--accent); }
+.result { flex-direction: column; gap: 2px; }
+
+.sheet-heading { flex: 1; min-width: 0; }
+.sheet-heading h2 { overflow-wrap: anywhere; }
+.sheet-text {
+	max-height: 30vh;
+	overflow: auto;
+	margin: 4px 8px 10px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: var(--surface-2);
+	font-size: 14px;
+	-webkit-user-select: text;
+	user-select: text;
+}
+.sheet-text p { margin: 0 0 0.3em; }
+.sheet-text ol, .sheet-text ul { margin: 0; padding-left: 1.3em; }
+.sheet-text li[data-list="bullet"] { list-style-type: disc; }
+#sheetMeta { padding: 0 8px 10px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 8px; }
+
+/* --- picture on its own --- */
+
+.lightbox {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: calc(var(--safe-t) + 56px) calc(var(--safe-r) + 8px) calc(var(--safe-b) + 8px) calc(var(--safe-l) + 8px);
+	background: rgba(10, 10, 12, 0.94);
+}
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.lightbox-bar {
+	position: absolute;
+	top: calc(var(--safe-t) + 8px);
+	right: calc(var(--safe-r) + 8px);
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.lightbox .icon-btn { color: #fff; background: rgba(255, 255, 255, 0.12); }
+.lightbox .pill { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+.toast {
+	position: fixed;
+	z-index: 60;
+	left: 50%;
+	bottom: calc(var(--safe-b) + 84px);
+	transform: translateX(-50%);
+	padding: 10px 16px;
+	border-radius: 999px;
+	background: var(--text);
+	color: var(--bg);
+	font-size: 14px;
+	font-weight: 550;
+	box-shadow: var(--shadow);
+}
+
+/* --- wide screens: side panels, mouse-sized controls --- */
+
+@media (min-width: 900px) {
+	.topbar { right: auto; width: min(560px, calc(100vw - 20px)); }
+	.desktop-only { display: inline-flex; }
+	.panel { animation: none; }
+	.panel.side {
+		top: calc(var(--safe-t) + 74px);
+		bottom: calc(var(--safe-b) + 10px);
+		left: calc(var(--safe-l) + 10px);
+		right: auto;
+		width: 330px;
+		max-height: none;
+	}
+	.panel.sheet {
+		top: calc(var(--safe-t) + 10px);
+		right: calc(var(--safe-r) + 10px);
+		left: auto;
+		bottom: auto;
+		width: 380px;
+		max-height: calc(100vh - 100px);
+	}
+	.has-side .dock { left: calc(50% + 170px); }
+}

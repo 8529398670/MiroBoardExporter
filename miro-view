@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Build the pan-and-zoom HTML viewer from the boards ./miro-export archived:
+#   ./miro-view                    # every board -> exports/site/index.html
+#   ./miro-view <board id|name>    # just these boards (added to the existing site)
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -x "$here/.venv/bin/python" ]; then
+	echo "Setting up $here/.venv (first run)..." >&2
+	python3 -m venv "$here/.venv"
+fi
+if ! "$here/.venv/bin/python" -c "import PIL, pymupdf, miro_viewer" 2>/dev/null; then
+	echo "Installing the viewer's dependencies (Pillow, PyMuPDF)..." >&2
+	"$here/.venv/bin/pip" install -q -e "$here[viewer]"
+fi
+exec "$here/.venv/bin/python" -m miro_viewer "$@"
